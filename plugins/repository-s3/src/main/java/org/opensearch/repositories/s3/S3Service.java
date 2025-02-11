@@ -206,7 +206,6 @@ class S3Service implements Closeable {
         final AwsCredentialsProvider credentials = buildCredentials(logger, clientSettings);
         builder.credentialsProvider(credentials);
         ApacheHttpClient.Builder httpClientBuilder = buildHttpClient(clientSettings);
-        builder.httpClientBuilder(httpClientBuilder);
         builder.overrideConfiguration(buildOverrideConfiguration(clientSettings));
 
         String endpoint = Strings.hasLength(clientSettings.endpoint) ? clientSettings.endpoint : DEFAULT_S3_ENDPOINT;
@@ -245,6 +244,7 @@ class S3Service implements Closeable {
                 return AmazonS3WithCredentials.create(client, credentials);
             }
         }
+        builder.httpClientBuilder(httpClientBuilder);
         final S3Client client = SocketAccess.doPrivileged(builder::build);
         return AmazonS3WithCredentials.create(client, credentials);
     }
