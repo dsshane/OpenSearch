@@ -58,6 +58,7 @@ import software.amazon.awssdk.services.sts.StsClientBuilder;
 import software.amazon.awssdk.services.sts.auth.StsAssumeRoleCredentialsProvider;
 import software.amazon.awssdk.services.sts.auth.StsWebIdentityTokenFileCredentialsProvider;
 import software.amazon.awssdk.services.sts.model.AssumeRoleRequest;
+import software.amazon.awssdk.utils.AttributeMap;
 
 import org.apache.http.conn.ssl.DefaultHostnameVerifier;
 import org.apache.http.conn.ssl.SSLConnectionSocketFactory;
@@ -94,6 +95,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static java.util.Collections.emptyMap;
+import static software.amazon.awssdk.http.SdkHttpConfigurationOption.TRUST_ALL_CERTIFICATES;
 
 class S3Service implements Closeable {
     private static final Logger logger = LogManager.getLogger(S3Service.class);
@@ -203,7 +205,8 @@ class S3Service implements Closeable {
 
         final AwsCredentialsProvider credentials = buildCredentials(logger, clientSettings);
         builder.credentialsProvider(credentials);
-        builder.httpClientBuilder(buildHttpClient(clientSettings));
+        ApacheHttpClient.Builder httpClientBuilder = buildHttpClient(clientSettings);
+        builder.httpClientBuilder(httpClientBuilder);
         builder.overrideConfiguration(buildOverrideConfiguration(clientSettings));
 
         String endpoint = Strings.hasLength(clientSettings.endpoint) ? clientSettings.endpoint : DEFAULT_S3_ENDPOINT;
@@ -231,6 +234,16 @@ class S3Service implements Closeable {
         }
         if (clientSettings.disableChunkedEncoding) {
             builder.serviceConfiguration(s -> s.chunkedEncodingEnabled(false));
+        }
+        if (endpoint.startsWith("https://")) {
+            // If it is an endpoint for a local service, we trust all certificates
+            String urlWithoutProtocol = endpoint.substring("https://".length());
+            if (urlWithoutProtocol.contains(":")) {
+                AttributeMap.Builder attributeMap = AttributeMap.builder();
+                attributeMap.put(TRUST_ALL_CERTIFICATES, true);
+                final S3Client client = builder.httpClient(httpClientBuilder.buildWithDefaults(attributeMap.build())).build();
+                return AmazonS3WithCredentials.create(client, credentials);
+            }
         }
         final S3Client client = SocketAccess.doPrivileged(builder::build);
         return AmazonS3WithCredentials.create(client, credentials);
