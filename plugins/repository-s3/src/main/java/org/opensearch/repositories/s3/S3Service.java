@@ -73,6 +73,7 @@ import org.opensearch.core.common.Strings;
 import org.opensearch.repositories.s3.S3ClientSettings.IrsaCredentials;
 import org.opensearch.repositories.s3.utils.AwsRequestSigner;
 import org.opensearch.repositories.s3.utils.Protocol;
+import software.amazon.awssdk.utils.AttributeMap;
 
 import javax.net.ssl.SSLContext;
 
@@ -203,7 +204,7 @@ class S3Service implements Closeable {
 
         final AwsCredentialsProvider credentials = buildCredentials(logger, clientSettings);
         builder.credentialsProvider(credentials);
-        builder.httpClientBuilder(buildHttpClient(clientSettings));
+        ApacheHttpClient.Builder httpClientBuilder = buildHttpClient(clientSettings);
         builder.overrideConfiguration(buildOverrideConfiguration(clientSettings));
 
         String endpoint = Strings.hasLength(clientSettings.endpoint) ? clientSettings.endpoint : DEFAULT_S3_ENDPOINT;
@@ -213,6 +214,17 @@ class S3Service implements Closeable {
             endpoint = clientSettings.protocol.toString() + "://" + endpoint;
         }
         logger.debug("using endpoint [{}] and region [{}]", endpoint, clientSettings.region);
+
+        AttributeMap attributeMap = null;
+        if (endpoint.startsWith("https://")) {
+            String[] token = endpoint.split(":");
+            if (token.length > 1) {
+                logger.debug("Trust all certificates for https connection on [{}] ", endpoint);
+                AttributeMap.Builder attributeMapBuilder = AttributeMap.builder();
+                attributeMapBuilder.put(software.amazon.awssdk.http.SdkHttpConfigurationOption.TRUST_ALL_CERTIFICATES, true);
+                attributeMap = attributeMapBuilder.build();
+            }
+        }
 
         // If the endpoint configuration isn't set on the builder then the default behaviour is to try
         // and work out what region we are in and use an appropriate endpoint - see AwsClientBuilder#setRegion.
@@ -232,6 +244,13 @@ class S3Service implements Closeable {
         if (clientSettings.disableChunkedEncoding) {
             builder.serviceConfiguration(s -> s.chunkedEncodingEnabled(false));
         }
+
+        if (attributeMap != null) {
+            builder.httpClient(httpClientBuilder.buildWithDefaults(attributeMap));
+        } else {
+            builder.httpClientBuilder(httpClientBuilder);
+        }
+
         final S3Client client = SocketAccess.doPrivileged(builder::build);
         return AmazonS3WithCredentials.create(client, credentials);
     }

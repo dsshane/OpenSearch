@@ -46,6 +46,7 @@ import org.opensearch.core.common.Strings;
 import org.opensearch.repositories.s3.S3ClientSettings.IrsaCredentials;
 import org.opensearch.repositories.s3.async.AsyncExecutorContainer;
 import org.opensearch.repositories.s3.async.AsyncTransferEventLoopGroup;
+import software.amazon.awssdk.utils.AttributeMap;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -274,6 +275,21 @@ class S3AsyncService implements Closeable {
         clientBuilder.eventLoopGroup(SdkEventLoopGroup.create(asyncTransferEventLoopGroup.getEventLoopGroup()));
         clientBuilder.tcpKeepAlive(true);
 
+        AttributeMap attributeMap = null;
+        String endpoint = clientSettings.endpoint;
+        if (Strings.hasLength(clientSettings.endpoint) && endpoint.startsWith("https://")) {
+            String[] token = endpoint.split(":");
+            if (token.length > 1) {
+                logger.debug("Trust all certificates for https connection on [{}] ", endpoint);
+                AttributeMap.Builder attributeMapBuilder = AttributeMap.builder();
+                attributeMapBuilder.put(software.amazon.awssdk.http.SdkHttpConfigurationOption.TRUST_ALL_CERTIFICATES, true);
+                attributeMap = attributeMapBuilder.build();
+            }
+        }
+
+        if (attributeMap != null) {
+            return clientBuilder.buildWithDefaults(attributeMap);
+        }
         return clientBuilder.build();
     }
 
