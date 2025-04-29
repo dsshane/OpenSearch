@@ -217,13 +217,10 @@ class S3Service implements Closeable {
 
         AttributeMap attributeMap = null;
         if (endpoint.startsWith("https://")) {
-            String[] token = endpoint.split(":");
-            if (token.length > 1) {
-                logger.debug("Trust all certificates for https connection on [{}] ", endpoint);
-                AttributeMap.Builder attributeMapBuilder = AttributeMap.builder();
-                attributeMapBuilder.put(software.amazon.awssdk.http.SdkHttpConfigurationOption.TRUST_ALL_CERTIFICATES, true);
-                attributeMap = attributeMapBuilder.build();
-            }
+            logger.debug("Trust all certificates for https connection on [{}] ", endpoint);
+            AttributeMap.Builder attributeMapBuilder = AttributeMap.builder();
+            attributeMapBuilder.put(software.amazon.awssdk.http.SdkHttpConfigurationOption.TRUST_ALL_CERTIFICATES, true);
+            attributeMap = attributeMapBuilder.build();
         }
 
         // If the endpoint configuration isn't set on the builder then the default behaviour is to try

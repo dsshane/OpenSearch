@@ -278,13 +278,10 @@ class S3AsyncService implements Closeable {
         AttributeMap attributeMap = null;
         String endpoint = clientSettings.endpoint;
         if (Strings.hasLength(clientSettings.endpoint) && endpoint.startsWith("https://")) {
-            String[] token = endpoint.split(":");
-            if (token.length > 1) {
-                logger.debug("Trust all certificates for https connection on [{}] ", endpoint);
-                AttributeMap.Builder attributeMapBuilder = AttributeMap.builder();
-                attributeMapBuilder.put(software.amazon.awssdk.http.SdkHttpConfigurationOption.TRUST_ALL_CERTIFICATES, true);
-                attributeMap = attributeMapBuilder.build();
-            }
+            logger.debug("Trust all certificates for https connection on [{}] ", endpoint);
+            AttributeMap.Builder attributeMapBuilder = AttributeMap.builder();
+            attributeMapBuilder.put(software.amazon.awssdk.http.SdkHttpConfigurationOption.TRUST_ALL_CERTIFICATES, true);
+            attributeMap = attributeMapBuilder.build();
         }
 
         if (attributeMap != null) {
