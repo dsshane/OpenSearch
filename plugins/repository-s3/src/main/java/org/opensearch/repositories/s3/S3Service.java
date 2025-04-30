@@ -248,7 +248,7 @@ class S3Service implements Closeable {
             builder.httpClientBuilder(httpClientBuilder);
         }
 
-        final S3Client client = SocketAccess.doPrivileged(builder::build);
+        final S3Client client = builder.build();
         return AmazonS3WithCredentials.create(client, credentials);
     }
 
