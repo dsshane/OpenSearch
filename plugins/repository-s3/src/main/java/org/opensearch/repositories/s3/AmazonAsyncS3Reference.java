@@ -45,4 +45,8 @@ public class AmazonAsyncS3Reference extends RefCountedReleasable<AmazonAsyncS3Wi
     public void setFullyS3Compatible(boolean fullyS3Compatible) {
         this.fullyS3Compatible = fullyS3Compatible;
     }
+
+    public boolean isFullyS3Compatible() {
+        return fullyS3Compatible;
+    }
 }

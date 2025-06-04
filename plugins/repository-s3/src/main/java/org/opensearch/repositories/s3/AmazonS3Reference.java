@@ -70,4 +70,8 @@ public class AmazonS3Reference extends RefCountedReleasable<S3Client> {
         this.fullyS3Compatible = fullyS3Compatible;
     }
 
+    public boolean isFullyS3Compatible() {
+        return fullyS3Compatible;
+    }
+
 }
