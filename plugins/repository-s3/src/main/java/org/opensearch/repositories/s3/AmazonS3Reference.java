@@ -43,6 +43,8 @@ import org.opensearch.common.concurrent.RefCountedReleasable;
  * counting.
  */
 public class AmazonS3Reference extends RefCountedReleasable<S3Client> {
+    boolean fullyS3Compatible = true;
+
     AmazonS3Reference(S3Client client) {
         this(client, null);
     }
@@ -63,4 +65,9 @@ public class AmazonS3Reference extends RefCountedReleasable<S3Client> {
             }
         });
     }
+
+    public void setFullyS3Compatible(boolean fullyS3Compatible) {
+        this.fullyS3Compatible = fullyS3Compatible;
+    }
+
 }

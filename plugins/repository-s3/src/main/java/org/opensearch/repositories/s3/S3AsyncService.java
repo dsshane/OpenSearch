@@ -124,6 +124,12 @@ class S3AsyncService implements Closeable {
             final AmazonAsyncS3Reference clientReference = new AmazonAsyncS3Reference(
                 buildClient(clientSettings, urgentExecutorBuilder, priorityExecutorBuilder, normalExecutorBuilder)
             );
+            String endpoint = clientSettings.endpoint;
+            if (endpoint != null) {
+                if (endpoint.toLowerCase().contains("storage.googleapis.com")) {
+                    clientReference.setFullyS3Compatible(false);
+                }
+            }
             clientReference.incRef();
             clientsCache = MapBuilder.newMapBuilder(clientsCache).put(clientSettings, clientReference).immutableMap();
             return clientReference;

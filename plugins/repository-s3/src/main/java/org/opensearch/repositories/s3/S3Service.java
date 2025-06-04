@@ -156,6 +156,12 @@ class S3Service implements Closeable {
                 return existing;
             }
             final AmazonS3Reference clientReference = new AmazonS3Reference(buildClient(clientSettings));
+            String endpoint = clientSettings.endpoint;
+            if (endpoint != null) {
+                if (endpoint.toLowerCase().contains("storage.googleapis.com")) {
+                    clientReference.setFullyS3Compatible(false);
+                }
+            }
             clientReference.incRef();
             clientsCache = MapBuilder.newMapBuilder(clientsCache).put(clientSettings, clientReference).immutableMap();
             return clientReference;
