@@ -102,6 +102,8 @@ public class S3BlobStore implements BlobStore {
     private final SizeBasedBlockingQ lowPrioritySizeBasedBlockingQ;
     private final GenericStatsMetricPublisher genericStatsMetricPublisher;
 
+    private boolean isFullyS3Compatible = true;
+
     S3BlobStore(
         S3Service service,
         S3AsyncService s3AsyncService,
@@ -145,6 +147,7 @@ public class S3BlobStore implements BlobStore {
 
         try (AmazonS3Reference clientReference = clientReference()) {
             if (clientReference != null) {
+                isFullyS3Compatible = clientReference.fullyS3Compatible;
                 asyncTransferManager.setFullyS3Compatible(clientReference.isFullyS3Compatible());
             }
         }
@@ -167,6 +170,10 @@ public class S3BlobStore implements BlobStore {
     @Override
     public String toString() {
         return bucket;
+    }
+
+    public boolean isFullyS3Compatible() {
+        return isFullyS3Compatible;
     }
 
     public AmazonS3Reference clientReference() {
