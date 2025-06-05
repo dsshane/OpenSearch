@@ -158,7 +158,7 @@ class S3Service implements Closeable {
             final AmazonS3Reference clientReference = new AmazonS3Reference(buildClient(clientSettings));
             String endpoint = clientSettings.endpoint;
             if (endpoint != null) {
-                if (endpoint.toLowerCase().contains("storage.googleapis.com")) {
+                if (endpoint.contains("storage.googleapis.com")) {
                     clientReference.setFullyS3Compatible(false);
                 }
             }

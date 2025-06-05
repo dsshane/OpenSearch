@@ -126,7 +126,7 @@ class S3AsyncService implements Closeable {
             );
             String endpoint = clientSettings.endpoint;
             if (endpoint != null) {
-                if (endpoint.toLowerCase().contains("storage.googleapis.com")) {
+                if (endpoint.contains("storage.googleapis.com")) {
                     clientReference.setFullyS3Compatible(false);
                 }
             }
