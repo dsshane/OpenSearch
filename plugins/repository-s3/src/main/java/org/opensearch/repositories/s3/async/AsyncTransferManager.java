@@ -67,6 +67,7 @@ public final class AsyncTransferManager {
     private final ExecutorService urgentExecutorService;
     private final long minimumPartSize;
     private final long maxRetryablePartSize;
+    private boolean fullyS3Compatible = true;
 
     @SuppressWarnings("rawtypes")
     private final TransferSemaphoresHolder transferSemaphoresHolder;
@@ -96,6 +97,14 @@ public final class AsyncTransferManager {
         this.maxRetryablePartSize = (long) (minimumPartSize + 0.1 * minimumPartSize);
         this.urgentExecutorService = urgentExecutorService;
         this.transferSemaphoresHolder = transferSemaphoresHolder;
+    }
+
+    public void setFullyS3Compatible(boolean fullyS3Compatible) {
+        this.fullyS3Compatible = fullyS3Compatible;
+    }
+
+    public boolean isFullyS3Compatible() {
+        return fullyS3Compatible;
     }
 
     /**
@@ -153,8 +162,11 @@ public final class AsyncTransferManager {
 
         CreateMultipartUploadRequest.Builder createMultipartUploadRequestBuilder = CreateMultipartUploadRequest.builder()
             .bucket(uploadRequest.getBucket())
-            .key(uploadRequest.getKey())
-            .overrideConfiguration(o -> o.addMetricPublisher(statsMetricPublisher.multipartUploadMetricCollector));
+            .key(uploadRequest.getKey());
+        if (isFullyS3Compatible()) {
+            createMultipartUploadRequestBuilder
+                .overrideConfiguration(o -> o.addMetricPublisher(statsMetricPublisher.multipartUploadMetricCollector));
+        }
 
         if (CollectionUtils.isNotEmpty(uploadRequest.getMetadata())) {
             createMultipartUploadRequestBuilder.metadata(uploadRequest.getMetadata());
@@ -212,7 +224,8 @@ public final class AsyncTransferManager {
                 statsMetricPublisher,
                 uploadRequest.isUploadRetryEnabled(),
                 transferSemaphoresHolder,
-                maxRetryablePartSize
+                maxRetryablePartSize,
+                fullyS3Compatible
             );
         } catch (Exception ex) {
             try {
@@ -289,14 +302,17 @@ public final class AsyncTransferManager {
 
         log.debug(() -> new ParameterizedMessage("Sending completeMultipartUploadRequest, uploadId: {}", uploadId));
         CompletedPart[] parts = IntStream.range(0, completedParts.length()).mapToObj(completedParts::get).toArray(CompletedPart[]::new);
-        CompleteMultipartUploadRequest completeMultipartUploadRequest = CompleteMultipartUploadRequest.builder()
+        CompleteMultipartUploadRequest.Builder completeMultipartUploadRequestBuilder = CompleteMultipartUploadRequest.builder()
             .bucket(uploadRequest.getBucket())
             .key(uploadRequest.getKey())
             .uploadId(uploadId)
-            .overrideConfiguration(o -> o.addMetricPublisher(statsMetricPublisher.multipartUploadMetricCollector))
-            .multipartUpload(CompletedMultipartUpload.builder().parts(parts).build())
-            .build();
+            .multipartUpload(CompletedMultipartUpload.builder().parts(parts).build());
 
+        if (fullyS3Compatible) {
+            completeMultipartUploadRequestBuilder
+                .overrideConfiguration(o -> o.addMetricPublisher(statsMetricPublisher.multipartUploadMetricCollector));
+        }
+        CompleteMultipartUploadRequest completeMultipartUploadRequest = completeMultipartUploadRequestBuilder.build();
         return SocketAccess.doPrivileged(() -> s3AsyncClient.completeMultipartUpload(completeMultipartUploadRequest));
     }
 
@@ -355,8 +371,12 @@ public final class AsyncTransferManager {
         PutObjectRequest.Builder putObjectRequestBuilder = PutObjectRequest.builder()
             .bucket(uploadRequest.getBucket())
             .key(uploadRequest.getKey())
-            .contentLength(uploadRequest.getContentLength())
-            .overrideConfiguration(o -> o.addMetricPublisher(statsMetricPublisher.putObjectMetricPublisher));
+            .contentLength(uploadRequest.getContentLength());
+
+        if (fullyS3Compatible) {
+            putObjectRequestBuilder
+                .overrideConfiguration(o -> o.addMetricPublisher(statsMetricPublisher.putObjectMetricPublisher));
+        }
 
         if (CollectionUtils.isNotEmpty(uploadRequest.getMetadata())) {
             putObjectRequestBuilder.metadata(uploadRequest.getMetadata());

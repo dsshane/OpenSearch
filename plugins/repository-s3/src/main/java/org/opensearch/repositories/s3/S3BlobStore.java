@@ -142,6 +142,12 @@ public class S3BlobStore implements BlobStore {
         this.lowPrioritySizeBasedBlockingQ = lowPrioritySizeBasedBlockingQ;
         this.genericStatsMetricPublisher = genericStatsMetricPublisher;
         this.permitBackedTransferEnabled = PERMIT_BACKED_TRANSFER_ENABLED.get(repositoryMetadata.settings());
+
+        try (AmazonS3Reference clientReference = clientReference()) {
+            if (clientReference != null) {
+                asyncTransferManager.setFullyS3Compatible(clientReference.isFullyS3Compatible());
+            }
+        }
     }
 
     @Override

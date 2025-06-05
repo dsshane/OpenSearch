@@ -75,7 +75,8 @@ public class AsyncPartsHandler {
         StatsMetricPublisher statsMetricPublisher,
         boolean uploadRetryEnabled,
         TransferSemaphoresHolder transferSemaphoresHolder,
-        long maxRetryablePartSize
+        long maxRetryablePartSize,
+        boolean isFullyS3Compatible
     ) throws InterruptedException {
         List<CompletableFuture<CompletedPart>> futures = new ArrayList<>();
         TransferSemaphoresHolder.RequestContext requestContext = transferSemaphoresHolder.createRequestContext();
@@ -94,8 +95,10 @@ public class AsyncPartsHandler {
                     .partNumber(partIdx + 1)
                     .key(uploadRequest.getKey())
                     .uploadId(uploadId)
-                    .overrideConfiguration(o -> o.addMetricPublisher(statsMetricPublisher.multipartUploadMetricCollector))
                     .contentLength(inputStreamContainer.getContentLength());
+                if (isFullyS3Compatible) {
+                    uploadPartRequestBuilder.overrideConfiguration(o -> o.addMetricPublisher(statsMetricPublisher.multipartUploadMetricCollector));
+                }
                 if (uploadRequest.doRemoteDataIntegrityCheck()) {
                     uploadPartRequestBuilder.checksumAlgorithm(ChecksumAlgorithm.CRC32);
                 }

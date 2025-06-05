@@ -385,18 +385,31 @@ class S3BlobContainer extends AbstractBlobContainer implements AsyncMultiStreamB
         final AtomicLong deletedBlobs = new AtomicLong();
         final AtomicLong deletedBytes = new AtomicLong();
         try (AmazonS3Reference clientReference = blobStore.clientReference()) {
-            ListObjectsV2Iterable listObjectsIterable = SocketAccess.doPrivileged(
-                () -> clientReference.get()
-                    .listObjectsV2Paginator(
-                        ListObjectsV2Request.builder()
-                            .bucket(blobStore.bucket())
-                            .prefix(keyPath)
-                            .overrideConfiguration(
-                                o -> o.addMetricPublisher(blobStore.getStatsMetricPublisher().listObjectsMetricPublisher)
-                            )
-                            .build()
-                    )
-            );
+            ListObjectsV2Iterable listObjectsIterable;
+            if (clientReference.isFullyS3Compatible()) {
+                listObjectsIterable = SocketAccess.doPrivileged(
+                    () -> clientReference.get()
+                        .listObjectsV2Paginator(
+                            ListObjectsV2Request.builder()
+                                .bucket(blobStore.bucket())
+                                .prefix(keyPath)
+                                .overrideConfiguration(
+                                    o -> o.addMetricPublisher(blobStore.getStatsMetricPublisher().listObjectsMetricPublisher)
+                                )
+                                .build()
+                        )
+                );
+            } else {
+                listObjectsIterable = SocketAccess.doPrivileged(
+                    () -> clientReference.get()
+                        .listObjectsV2Paginator(
+                            ListObjectsV2Request.builder()
+                                .bucket(blobStore.bucket())
+                                .prefix(keyPath)
+                                .build()
+                        )
+                );
+            }
 
             Iterator<ListObjectsV2Response> listObjectsResponseIterator = listObjectsIterable.iterator();
             while (listObjectsResponseIterator.hasNext()) {
@@ -516,7 +529,7 @@ class S3BlobContainer extends AbstractBlobContainer implements AsyncMultiStreamB
             }
             String prefix = blobNamePrefix == null ? keyPath : buildKey(blobNamePrefix);
             try (AmazonS3Reference clientReference = blobStore.clientReference()) {
-                List<BlobMetadata> blobs = executeListing(clientReference, listObjectsRequest(prefix, limit), limit).stream()
+                List<BlobMetadata> blobs = executeListing(clientReference, listObjectsRequest(prefix, limit, clientReference.isFullyS3Compatible()), limit).stream()
                     .flatMap(listing -> listing.contents().stream())
                     .map(s3Object -> new PlainBlobMetadata(s3Object.key().substring(keyPath.length()), s3Object.size()))
                     .collect(Collectors.toList());
@@ -531,7 +544,7 @@ class S3BlobContainer extends AbstractBlobContainer implements AsyncMultiStreamB
     public Map<String, BlobMetadata> listBlobsByPrefix(@Nullable String blobNamePrefix) throws IOException {
         String prefix = blobNamePrefix == null ? keyPath : buildKey(blobNamePrefix);
         try (AmazonS3Reference clientReference = blobStore.clientReference()) {
-            return executeListing(clientReference, listObjectsRequest(prefix)).stream()
+            return executeListing(clientReference, listObjectsRequest(prefix, clientReference.isFullyS3Compatible())).stream()
                 .flatMap(listing -> listing.contents().stream())
                 .map(s3Object -> new PlainBlobMetadata(s3Object.key().substring(keyPath.length()), s3Object.size()))
                 .collect(Collectors.toMap(PlainBlobMetadata::name, Function.identity()));
@@ -548,7 +561,7 @@ class S3BlobContainer extends AbstractBlobContainer implements AsyncMultiStreamB
     @Override
     public Map<String, BlobContainer> children() throws IOException {
         try (AmazonS3Reference clientReference = blobStore.clientReference()) {
-            return executeListing(clientReference, listObjectsRequest(keyPath)).stream().flatMap(listObjectsResponse -> {
+            return executeListing(clientReference, listObjectsRequest(keyPath, clientReference.isFullyS3Compatible())).stream().flatMap(listObjectsResponse -> {
                 assert listObjectsResponse.contents().stream().noneMatch(s -> {
                     for (CommonPrefix commonPrefix : listObjectsResponse.commonPrefixes()) {
                         if (s.key().substring(keyPath.length()).startsWith(commonPrefix.prefix())) {
@@ -593,17 +606,19 @@ class S3BlobContainer extends AbstractBlobContainer implements AsyncMultiStreamB
         });
     }
 
-    private ListObjectsV2Request listObjectsRequest(String keyPath) {
-        return ListObjectsV2Request.builder()
+    private ListObjectsV2Request listObjectsRequest(String keyPath, boolean isFullyS3Compatible) {
+        ListObjectsV2Request.Builder listObjectsV2RequestBuilder = ListObjectsV2Request.builder()
             .bucket(blobStore.bucket())
             .prefix(keyPath)
-            .delimiter("/")
-            .overrideConfiguration(o -> o.addMetricPublisher(blobStore.getStatsMetricPublisher().listObjectsMetricPublisher))
-            .build();
+            .delimiter("/");
+        if (isFullyS3Compatible) {
+            listObjectsV2RequestBuilder.overrideConfiguration(o -> o.addMetricPublisher(blobStore.getStatsMetricPublisher().listObjectsMetricPublisher));
+        }
+        return listObjectsV2RequestBuilder.build();
     }
 
-    private ListObjectsV2Request listObjectsRequest(String keyPath, int limit) {
-        return listObjectsRequest(keyPath).toBuilder().maxKeys(Math.min(limit, 1000)).build();
+    private ListObjectsV2Request listObjectsRequest(String keyPath, int limit, boolean isFullyS3Compatible) {
+        return listObjectsRequest(keyPath, isFullyS3Compatible).toBuilder().maxKeys(Math.min(limit, 1000)).build();
     }
 
     private String buildKey(String blobName) {
@@ -633,9 +648,7 @@ class S3BlobContainer extends AbstractBlobContainer implements AsyncMultiStreamB
             .bucket(blobStore.bucket())
             .key(blobName)
             .contentLength(blobSize)
-            .storageClass(blobStore.getStorageClass())
-            .acl(blobStore.getCannedACL())
-            .overrideConfiguration(o -> o.addMetricPublisher(blobStore.getStatsMetricPublisher().putObjectMetricPublisher));
+            .storageClass(blobStore.getStorageClass());
 
         if (CollectionUtils.isNotEmpty(metadata)) {
             putObjectRequestBuilder = putObjectRequestBuilder.metadata(metadata);
@@ -644,8 +657,15 @@ class S3BlobContainer extends AbstractBlobContainer implements AsyncMultiStreamB
             putObjectRequestBuilder.serverSideEncryption(ServerSideEncryption.AES256);
         }
 
-        PutObjectRequest putObjectRequest = putObjectRequestBuilder.build();
         try (AmazonS3Reference clientReference = blobStore.clientReference()) {
+
+            if (clientReference.isFullyS3Compatible()) {
+                putObjectRequestBuilder
+                    .acl(blobStore.getCannedACL())
+                    .overrideConfiguration(o -> o.addMetricPublisher(blobStore.getStatsMetricPublisher().putObjectMetricPublisher));
+            }
+            PutObjectRequest putObjectRequest = putObjectRequestBuilder.build();
+
             final InputStream requestInputStream;
             if (blobStore.isUploadRetryEnabled()) {
                 requestInputStream = new BufferedInputStream(input, (int) (blobSize + 1));
@@ -690,9 +710,7 @@ class S3BlobContainer extends AbstractBlobContainer implements AsyncMultiStreamB
         CreateMultipartUploadRequest.Builder createMultipartUploadRequestBuilder = CreateMultipartUploadRequest.builder()
             .bucket(bucketName)
             .key(blobName)
-            .storageClass(blobStore.getStorageClass())
-            .acl(blobStore.getCannedACL())
-            .overrideConfiguration(o -> o.addMetricPublisher(blobStore.getStatsMetricPublisher().multipartUploadMetricCollector));
+            .storageClass(blobStore.getStorageClass());
 
         if (CollectionUtils.isNotEmpty(metadata)) {
             createMultipartUploadRequestBuilder.metadata(metadata);
@@ -709,8 +727,15 @@ class S3BlobContainer extends AbstractBlobContainer implements AsyncMultiStreamB
             requestInputStream = input;
         }
 
-        CreateMultipartUploadRequest createMultipartUploadRequest = createMultipartUploadRequestBuilder.build();
         try (AmazonS3Reference clientReference = blobStore.clientReference()) {
+
+            if (clientReference.isFullyS3Compatible()) {
+                createMultipartUploadRequestBuilder
+                    .acl(blobStore.getCannedACL())
+                    .overrideConfiguration(o -> o.addMetricPublisher(blobStore.getStatsMetricPublisher().multipartUploadMetricCollector));
+            }
+            CreateMultipartUploadRequest createMultipartUploadRequest = createMultipartUploadRequestBuilder.build();
+
             uploadId.set(
                 SocketAccess.doPrivileged(() -> clientReference.get().createMultipartUpload(createMultipartUploadRequest).uploadId())
             );
@@ -722,14 +747,17 @@ class S3BlobContainer extends AbstractBlobContainer implements AsyncMultiStreamB
 
             long bytesCount = 0;
             for (int i = 1; i <= nbParts; i++) {
-                final UploadPartRequest uploadPartRequest = UploadPartRequest.builder()
-                    .bucket(bucketName)
-                    .key(blobName)
-                    .uploadId(uploadId.get())
-                    .partNumber(i)
-                    .contentLength((i < nbParts) ? partSize : lastPartSize)
-                    .overrideConfiguration(o -> o.addMetricPublisher(blobStore.getStatsMetricPublisher().multipartUploadMetricCollector))
-                    .build();
+                UploadPartRequest.Builder uploadPartRequestBuilder = UploadPartRequest.builder()
+                        .bucket(bucketName)
+                        .key(blobName)
+                        .uploadId(uploadId.get())
+                        .partNumber(i)
+                        .contentLength((i < nbParts) ? partSize : lastPartSize);
+                if (clientReference.isFullyS3Compatible()) {
+                    uploadPartRequestBuilder
+                        .overrideConfiguration(o -> o.addMetricPublisher(blobStore.getStatsMetricPublisher().multipartUploadMetricCollector));
+                }
+                final UploadPartRequest uploadPartRequest = uploadPartRequestBuilder.build();
 
                 bytesCount += uploadPartRequest.contentLength();
                 final UploadPartResponse uploadResponse = SocketAccess.doPrivileged(
@@ -745,13 +773,17 @@ class S3BlobContainer extends AbstractBlobContainer implements AsyncMultiStreamB
                 );
             }
 
-            CompleteMultipartUploadRequest completeMultipartUploadRequest = CompleteMultipartUploadRequest.builder()
+            CompleteMultipartUploadRequest.Builder multipartUploadRequestBuilder = CompleteMultipartUploadRequest.builder()
                 .bucket(bucketName)
                 .key(blobName)
                 .uploadId(uploadId.get())
-                .multipartUpload(CompletedMultipartUpload.builder().parts(parts).build())
-                .overrideConfiguration(o -> o.addMetricPublisher(blobStore.getStatsMetricPublisher().multipartUploadMetricCollector))
-                .build();
+                .multipartUpload(CompletedMultipartUpload.builder().parts(parts).build());
+            if (clientReference.isFullyS3Compatible()) {
+                multipartUploadRequestBuilder
+                    .overrideConfiguration(o -> o.addMetricPublisher(blobStore.getStatsMetricPublisher().multipartUploadMetricCollector));
+            }
+
+            CompleteMultipartUploadRequest completeMultipartUploadRequest = multipartUploadRequestBuilder.build();
 
             SocketAccess.doPrivilegedVoid(() -> clientReference.get().completeMultipartUpload(completeMultipartUploadRequest));
             success = true;
