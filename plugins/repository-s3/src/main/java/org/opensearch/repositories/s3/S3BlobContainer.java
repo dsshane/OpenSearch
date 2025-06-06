@@ -402,12 +402,7 @@ class S3BlobContainer extends AbstractBlobContainer implements AsyncMultiStreamB
             } else {
                 listObjectsIterable = SocketAccess.doPrivileged(
                     () -> clientReference.get()
-                        .listObjectsV2Paginator(
-                            ListObjectsV2Request.builder()
-                                .bucket(blobStore.bucket())
-                                .prefix(keyPath)
-                                .build()
-                        )
+                        .listObjectsV2Paginator(ListObjectsV2Request.builder().bucket(blobStore.bucket()).prefix(keyPath).build())
                 );
             }
 
@@ -450,52 +445,57 @@ class S3BlobContainer extends AbstractBlobContainer implements AsyncMultiStreamB
             outstanding = new HashSet<>(blobNames);
         }
         try (AmazonS3Reference clientReference = blobStore.clientReference()) {
-            // S3 API allows 1k blobs per delete so we split up the given blobs into requests of bulk size deletes
-            final List<DeleteObjectsRequest> deleteRequests = new ArrayList<>();
-            final List<String> partition = new ArrayList<>();
-            for (String key : outstanding) {
-                partition.add(key);
-                if (partition.size() == blobStore.getBulkDeletesSize()) {
-                    deleteRequests.add(bulkDelete(blobStore.bucket(), partition));
-                    partition.clear();
-                }
-            }
-            if (partition.isEmpty() == false) {
-                deleteRequests.add(bulkDelete(blobStore.bucket(), partition));
-            }
-            SocketAccess.doPrivilegedVoid(() -> {
-                SdkException aex = null;
-                for (DeleteObjectsRequest deleteRequest : deleteRequests) {
-                    List<String> keysInRequest = deleteRequest.delete()
-                        .objects()
-                        .stream()
-                        .map(ObjectIdentifier::key)
-                        .collect(Collectors.toList());
-                    try {
-                        DeleteObjectsResponse deleteObjectsResponse = clientReference.get().deleteObjects(deleteRequest);
-                        outstanding.removeAll(keysInRequest);
-                        outstanding.addAll(deleteObjectsResponse.errors().stream().map(S3Error::key).collect(Collectors.toSet()));
-                        if (!deleteObjectsResponse.errors().isEmpty()) {
-                            logger.warn(
-                                () -> new ParameterizedMessage(
-                                    "Failed to delete some blobs {}",
-                                    deleteObjectsResponse.errors()
-                                        .stream()
-                                        .map(s3Error -> "[" + s3Error.key() + "][" + s3Error.code() + "][" + s3Error.message() + "]")
-                                        .collect(Collectors.toList())
-                                )
-                            );
-                        }
-                    } catch (SdkException e) {
-                        // The AWS client threw any unexpected exception and did not execute the request at all so we do not
-                        // remove any keys from the outstanding deletes set.
-                        aex = ExceptionsHelper.useOrSuppress(aex, e);
+            if (clientReference.isFullyS3Compatible()) {
+                // S3 API allows 1k blobs per delete so we split up the given blobs into requests of bulk size deletes
+                final List<DeleteObjectsRequest> deleteRequests = new ArrayList<>();
+                final List<String> partition = new ArrayList<>();
+                for (String key : outstanding) {
+                    partition.add(key);
+                    if (partition.size() == blobStore.getBulkDeletesSize()) {
+                        deleteRequests.add(bulkDelete(blobStore.bucket(), partition));
+                        partition.clear();
                     }
                 }
-                if (aex != null) {
-                    throw aex;
+                if (partition.isEmpty() == false) {
+                    deleteRequests.add(bulkDelete(blobStore.bucket(), partition));
                 }
-            });
+                SocketAccess.doPrivilegedVoid(() -> {
+                    SdkException aex = null;
+                    for (DeleteObjectsRequest deleteRequest : deleteRequests) {
+                        List<String> keysInRequest = deleteRequest.delete()
+                            .objects()
+                            .stream()
+                            .map(ObjectIdentifier::key)
+                            .collect(Collectors.toList());
+                        try {
+                            DeleteObjectsResponse deleteObjectsResponse = clientReference.get().deleteObjects(deleteRequest);
+                            outstanding.removeAll(keysInRequest);
+                            outstanding.addAll(deleteObjectsResponse.errors().stream().map(S3Error::key).collect(Collectors.toSet()));
+                            if (!deleteObjectsResponse.errors().isEmpty()) {
+                                logger.warn(
+                                    () -> new ParameterizedMessage(
+                                        "Failed to delete some blobs {}",
+                                        deleteObjectsResponse.errors()
+                                            .stream()
+                                            .map(s3Error -> "[" + s3Error.key() + "][" + s3Error.code() + "][" + s3Error.message() + "]")
+                                            .collect(Collectors.toList())
+                                    )
+                                );
+                            }
+                        } catch (SdkException e) {
+                            // The AWS client threw any unexpected exception and did not execute the request at all so we do not
+                            // remove any keys from the outstanding deletes set.
+                            aex = ExceptionsHelper.useOrSuppress(aex, e);
+                        }
+                    }
+                    if (aex != null) {
+                        throw aex;
+                    }
+                });
+            } else {
+                // Google does not support bulk deletes, so we delete each blob individually using multiple threads.
+                NoneBatchableDeleteHelper.deleteObjectsIgnoreNotExists(clientReference.get(), blobStore.bucket(), blobNames, outstanding);
+            }
         } catch (Exception e) {
             throw new IOException("Failed to delete blobs [" + outstanding + "]", e);
         }
@@ -529,7 +529,11 @@ class S3BlobContainer extends AbstractBlobContainer implements AsyncMultiStreamB
             }
             String prefix = blobNamePrefix == null ? keyPath : buildKey(blobNamePrefix);
             try (AmazonS3Reference clientReference = blobStore.clientReference()) {
-                List<BlobMetadata> blobs = executeListing(clientReference, listObjectsRequest(prefix, limit, clientReference.isFullyS3Compatible()), limit).stream()
+                List<BlobMetadata> blobs = executeListing(
+                    clientReference,
+                    listObjectsRequest(prefix, limit, clientReference.isFullyS3Compatible()),
+                    limit
+                ).stream()
                     .flatMap(listing -> listing.contents().stream())
                     .map(s3Object -> new PlainBlobMetadata(s3Object.key().substring(keyPath.length()), s3Object.size()))
                     .collect(Collectors.toList());
@@ -561,17 +565,18 @@ class S3BlobContainer extends AbstractBlobContainer implements AsyncMultiStreamB
     @Override
     public Map<String, BlobContainer> children() throws IOException {
         try (AmazonS3Reference clientReference = blobStore.clientReference()) {
-            return executeListing(clientReference, listObjectsRequest(keyPath, clientReference.isFullyS3Compatible())).stream().flatMap(listObjectsResponse -> {
-                assert listObjectsResponse.contents().stream().noneMatch(s -> {
-                    for (CommonPrefix commonPrefix : listObjectsResponse.commonPrefixes()) {
-                        if (s.key().substring(keyPath.length()).startsWith(commonPrefix.prefix())) {
-                            return true;
+            return executeListing(clientReference, listObjectsRequest(keyPath, clientReference.isFullyS3Compatible())).stream()
+                .flatMap(listObjectsResponse -> {
+                    assert listObjectsResponse.contents().stream().noneMatch(s -> {
+                        for (CommonPrefix commonPrefix : listObjectsResponse.commonPrefixes()) {
+                            if (s.key().substring(keyPath.length()).startsWith(commonPrefix.prefix())) {
+                                return true;
+                            }
                         }
-                    }
-                    return false;
-                }) : "Response contained children for listed common prefixes.";
-                return listObjectsResponse.commonPrefixes().stream();
-            })
+                        return false;
+                    }) : "Response contained children for listed common prefixes.";
+                    return listObjectsResponse.commonPrefixes().stream();
+                })
                 .map(commonPrefix -> commonPrefix.prefix().substring(keyPath.length()))
                 .filter(name -> name.isEmpty() == false)
                 // Stripping the trailing slash off of the common prefix
@@ -612,7 +617,9 @@ class S3BlobContainer extends AbstractBlobContainer implements AsyncMultiStreamB
             .prefix(keyPath)
             .delimiter("/");
         if (isFullyS3Compatible) {
-            listObjectsV2RequestBuilder.overrideConfiguration(o -> o.addMetricPublisher(blobStore.getStatsMetricPublisher().listObjectsMetricPublisher));
+            listObjectsV2RequestBuilder.overrideConfiguration(
+                o -> o.addMetricPublisher(blobStore.getStatsMetricPublisher().listObjectsMetricPublisher)
+            );
         }
         return listObjectsV2RequestBuilder.build();
     }
@@ -660,8 +667,7 @@ class S3BlobContainer extends AbstractBlobContainer implements AsyncMultiStreamB
         try (AmazonS3Reference clientReference = blobStore.clientReference()) {
 
             if (clientReference.isFullyS3Compatible()) {
-                putObjectRequestBuilder
-                    .acl(blobStore.getCannedACL())
+                putObjectRequestBuilder.acl(blobStore.getCannedACL())
                     .overrideConfiguration(o -> o.addMetricPublisher(blobStore.getStatsMetricPublisher().putObjectMetricPublisher));
             }
             PutObjectRequest putObjectRequest = putObjectRequestBuilder.build();
@@ -730,8 +736,7 @@ class S3BlobContainer extends AbstractBlobContainer implements AsyncMultiStreamB
         try (AmazonS3Reference clientReference = blobStore.clientReference()) {
 
             if (clientReference.isFullyS3Compatible()) {
-                createMultipartUploadRequestBuilder
-                    .acl(blobStore.getCannedACL())
+                createMultipartUploadRequestBuilder.acl(blobStore.getCannedACL())
                     .overrideConfiguration(o -> o.addMetricPublisher(blobStore.getStatsMetricPublisher().multipartUploadMetricCollector));
             }
             CreateMultipartUploadRequest createMultipartUploadRequest = createMultipartUploadRequestBuilder.build();
@@ -748,14 +753,15 @@ class S3BlobContainer extends AbstractBlobContainer implements AsyncMultiStreamB
             long bytesCount = 0;
             for (int i = 1; i <= nbParts; i++) {
                 UploadPartRequest.Builder uploadPartRequestBuilder = UploadPartRequest.builder()
-                        .bucket(bucketName)
-                        .key(blobName)
-                        .uploadId(uploadId.get())
-                        .partNumber(i)
-                        .contentLength((i < nbParts) ? partSize : lastPartSize);
+                    .bucket(bucketName)
+                    .key(blobName)
+                    .uploadId(uploadId.get())
+                    .partNumber(i)
+                    .contentLength((i < nbParts) ? partSize : lastPartSize);
                 if (clientReference.isFullyS3Compatible()) {
-                    uploadPartRequestBuilder
-                        .overrideConfiguration(o -> o.addMetricPublisher(blobStore.getStatsMetricPublisher().multipartUploadMetricCollector));
+                    uploadPartRequestBuilder.overrideConfiguration(
+                        o -> o.addMetricPublisher(blobStore.getStatsMetricPublisher().multipartUploadMetricCollector)
+                    );
                 }
                 final UploadPartRequest uploadPartRequest = uploadPartRequestBuilder.build();
 
@@ -779,8 +785,9 @@ class S3BlobContainer extends AbstractBlobContainer implements AsyncMultiStreamB
                 .uploadId(uploadId.get())
                 .multipartUpload(CompletedMultipartUpload.builder().parts(parts).build());
             if (clientReference.isFullyS3Compatible()) {
-                multipartUploadRequestBuilder
-                    .overrideConfiguration(o -> o.addMetricPublisher(blobStore.getStatsMetricPublisher().multipartUploadMetricCollector));
+                multipartUploadRequestBuilder.overrideConfiguration(
+                    o -> o.addMetricPublisher(blobStore.getStatsMetricPublisher().multipartUploadMetricCollector)
+                );
             }
 
             CompleteMultipartUploadRequest completeMultipartUploadRequest = multipartUploadRequestBuilder.build();

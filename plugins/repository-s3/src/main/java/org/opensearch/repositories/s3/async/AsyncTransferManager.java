@@ -164,8 +164,9 @@ public final class AsyncTransferManager {
             .bucket(uploadRequest.getBucket())
             .key(uploadRequest.getKey());
         if (isFullyS3Compatible()) {
-            createMultipartUploadRequestBuilder
-                .overrideConfiguration(o -> o.addMetricPublisher(statsMetricPublisher.multipartUploadMetricCollector));
+            createMultipartUploadRequestBuilder.overrideConfiguration(
+                o -> o.addMetricPublisher(statsMetricPublisher.multipartUploadMetricCollector)
+            );
         }
 
         if (CollectionUtils.isNotEmpty(uploadRequest.getMetadata())) {
@@ -309,8 +310,9 @@ public final class AsyncTransferManager {
             .multipartUpload(CompletedMultipartUpload.builder().parts(parts).build());
 
         if (fullyS3Compatible) {
-            completeMultipartUploadRequestBuilder
-                .overrideConfiguration(o -> o.addMetricPublisher(statsMetricPublisher.multipartUploadMetricCollector));
+            completeMultipartUploadRequestBuilder.overrideConfiguration(
+                o -> o.addMetricPublisher(statsMetricPublisher.multipartUploadMetricCollector)
+            );
         }
         CompleteMultipartUploadRequest completeMultipartUploadRequest = completeMultipartUploadRequestBuilder.build();
         return SocketAccess.doPrivileged(() -> s3AsyncClient.completeMultipartUpload(completeMultipartUploadRequest));
@@ -374,8 +376,7 @@ public final class AsyncTransferManager {
             .contentLength(uploadRequest.getContentLength());
 
         if (fullyS3Compatible) {
-            putObjectRequestBuilder
-                .overrideConfiguration(o -> o.addMetricPublisher(statsMetricPublisher.putObjectMetricPublisher));
+            putObjectRequestBuilder.overrideConfiguration(o -> o.addMetricPublisher(statsMetricPublisher.putObjectMetricPublisher));
         }
 
         if (CollectionUtils.isNotEmpty(uploadRequest.getMetadata())) {

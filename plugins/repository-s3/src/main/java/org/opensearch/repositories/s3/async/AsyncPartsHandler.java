@@ -97,7 +97,9 @@ public class AsyncPartsHandler {
                     .uploadId(uploadId)
                     .contentLength(inputStreamContainer.getContentLength());
                 if (isFullyS3Compatible) {
-                    uploadPartRequestBuilder.overrideConfiguration(o -> o.addMetricPublisher(statsMetricPublisher.multipartUploadMetricCollector));
+                    uploadPartRequestBuilder.overrideConfiguration(
+                        o -> o.addMetricPublisher(statsMetricPublisher.multipartUploadMetricCollector)
+                    );
                 }
                 if (uploadRequest.doRemoteDataIntegrityCheck()) {
                     uploadPartRequestBuilder.checksumAlgorithm(ChecksumAlgorithm.CRC32);
