@@ -924,6 +924,7 @@ class S3BlobContainer extends AbstractBlobContainer implements AsyncMultiStreamB
     public void deleteAsync(ActionListener<DeleteResult> completionListener) {
         try (AmazonAsyncS3Reference asyncClientReference = blobStore.asyncClientReference()) {
             S3AsyncClient s3AsyncClient = asyncClientReference.get().client();
+            final boolean isFullyS3Compatible = asyncClientReference.isFullyS3Compatible();
 
             ListObjectsV2Request listRequest = ListObjectsV2Request.builder().bucket(blobStore.bucket()).prefix(keyPath).build();
             ListObjectsV2Publisher listPublisher = s3AsyncClient.listObjectsV2Paginator(listRequest);
@@ -952,23 +953,28 @@ class S3BlobContainer extends AbstractBlobContainer implements AsyncMultiStreamB
                         objectsToDelete.add(s3Object.key());
                     });
 
-                    int bulkDeleteSize = blobStore.getBulkDeletesSize();
-                    if (objectsToDelete.size() >= bulkDeleteSize) {
-                        int fullBatchesCount = objectsToDelete.size() / bulkDeleteSize;
-                        int itemsToDelete = fullBatchesCount * bulkDeleteSize;
+                    if (isFullyS3Compatible) {
+                        int bulkDeleteSize = blobStore.getBulkDeletesSize();
+                        if (objectsToDelete.size() >= bulkDeleteSize) {
+                            int fullBatchesCount = objectsToDelete.size() / bulkDeleteSize;
+                            int itemsToDelete = fullBatchesCount * bulkDeleteSize;
 
-                        List<String> batchToDelete = new ArrayList<>(objectsToDelete.subList(0, itemsToDelete));
-                        objectsToDelete.subList(0, itemsToDelete).clear();
+                            List<String> batchToDelete = new ArrayList<>(objectsToDelete.subList(0, itemsToDelete));
+                            objectsToDelete.subList(0, itemsToDelete).clear();
 
-                        deletionChain = S3AsyncDeleteHelper.executeDeleteChain(
-                            s3AsyncClient,
-                            blobStore,
-                            batchToDelete,
-                            deletionChain,
-                            () -> subscription.request(1)
-                        );
+                            deletionChain = S3AsyncDeleteHelper.executeDeleteChain(
+                                s3AsyncClient,
+                                blobStore,
+                                batchToDelete,
+                                deletionChain,
+                                () -> subscription.request(1)
+                            );
+                        } else {
+                            subscription.request(1);
+                        }
                     } else {
-                        subscription.request(1);
+                        // Google does not support bulk deletes, so we delete each blob individually using multiple threads.
+                        NoneBatchableDeleteHelper.deleteObjectsIgnoreNotExists(s3AsyncClient, blobStore.bucket(), objectsToDelete);
                     }
                 }
 
@@ -1025,15 +1031,24 @@ class S3BlobContainer extends AbstractBlobContainer implements AsyncMultiStreamB
             S3AsyncClient s3AsyncClient = asyncClientReference.get().client();
 
             List<String> keysToDelete = blobNames.stream().map(this::buildKey).collect(Collectors.toList());
-
-            S3AsyncDeleteHelper.executeDeleteChain(s3AsyncClient, blobStore, keysToDelete, CompletableFuture.completedFuture(null), null)
-                .whenComplete((v, throwable) -> {
+            if (asyncClientReference.isFullyS3Compatible()) {
+                S3AsyncDeleteHelper.executeDeleteChain(
+                    s3AsyncClient,
+                    blobStore,
+                    keysToDelete,
+                    CompletableFuture.completedFuture(null),
+                    null
+                ).whenComplete((v, throwable) -> {
                     if (throwable != null) {
                         completionListener.onFailure(new IOException("Failed to delete blobs " + blobNames, throwable));
                     } else {
                         completionListener.onResponse(null);
                     }
                 });
+            } else {
+                // Google does not support bulk deletes, so we delete each blob individually using multiple threads.
+                NoneBatchableDeleteHelper.deleteObjectsIgnoreNotExists(s3AsyncClient, blobStore.bucket(), keysToDelete);
+            }
         } catch (Exception e) {
             completionListener.onFailure(new IOException("Failed to initiate async blob deletion", e));
         }
