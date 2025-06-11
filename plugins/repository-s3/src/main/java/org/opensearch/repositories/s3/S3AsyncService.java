@@ -34,6 +34,7 @@ import software.amazon.awssdk.services.sts.StsClientBuilder;
 import software.amazon.awssdk.services.sts.auth.StsAssumeRoleCredentialsProvider;
 import software.amazon.awssdk.services.sts.auth.StsWebIdentityTokenFileCredentialsProvider;
 import software.amazon.awssdk.services.sts.model.AssumeRoleRequest;
+import software.amazon.awssdk.utils.AttributeMap;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -46,7 +47,6 @@ import org.opensearch.core.common.Strings;
 import org.opensearch.repositories.s3.S3ClientSettings.IrsaCredentials;
 import org.opensearch.repositories.s3.async.AsyncExecutorContainer;
 import org.opensearch.repositories.s3.async.AsyncTransferEventLoopGroup;
-import software.amazon.awssdk.utils.AttributeMap;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -124,6 +124,12 @@ class S3AsyncService implements Closeable {
             final AmazonAsyncS3Reference clientReference = new AmazonAsyncS3Reference(
                 buildClient(clientSettings, urgentExecutorBuilder, priorityExecutorBuilder, normalExecutorBuilder)
             );
+            String endpoint = clientSettings.endpoint;
+            if (endpoint != null) {
+                if (endpoint.contains("storage.googleapis.com")) {
+                    clientReference.setFullyS3Compatible(false);
+                }
+            }
             clientReference.incRef();
             clientsCache = MapBuilder.newMapBuilder(clientsCache).put(clientSettings, clientReference).immutableMap();
             return clientReference;

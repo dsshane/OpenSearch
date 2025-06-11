@@ -24,6 +24,7 @@ import java.io.IOException;
 public class AmazonAsyncS3Reference extends RefCountedReleasable<AmazonAsyncS3WithCredentials> {
 
     private static final Logger logger = LogManager.getLogger(AmazonAsyncS3Reference.class);
+    boolean fullyS3Compatible = true;
 
     AmazonAsyncS3Reference(AmazonAsyncS3WithCredentials client) {
         super("AWS_S3_CLIENT", client, () -> {
@@ -39,5 +40,13 @@ public class AmazonAsyncS3Reference extends RefCountedReleasable<AmazonAsyncS3Wi
                 }
             }
         });
+    }
+
+    public void setFullyS3Compatible(boolean fullyS3Compatible) {
+        this.fullyS3Compatible = fullyS3Compatible;
+    }
+
+    public boolean isFullyS3Compatible() {
+        return fullyS3Compatible;
     }
 }
